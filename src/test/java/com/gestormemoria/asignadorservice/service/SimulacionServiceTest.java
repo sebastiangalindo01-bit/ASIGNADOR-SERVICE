@@ -2,14 +2,17 @@
 package com.gestormemoria.asignadorservice.service;
 
 import com.gestormemoria.asignadorservice.dto.SimulacionRequestDTO;
+import com.gestormemoria.asignadorservice.dto.SimulacionResponseDTO;
 import com.gestormemoria.asignadorservice.model.ResultadoOperacion;
 import com.gestormemoria.asignadorservice.nativebridge.MemoriaNative;
+import org.springframework.beans.factory.ObjectProvider;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class SimulacionServiceTest {
 
@@ -153,5 +156,25 @@ class SimulacionServiceTest {
                 simulacionService.ejecutar(dto);
 
         assertFalse(resultados.get(0).isAceptada());
+    }
+
+    @Test
+    void respaldoJavaExplicaLaFragmentacionExternaConElEstadoDelRechazo() {
+        ObjectProvider<MemoriaNative> provider = mock(ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(null);
+        SimulacionService java = new SimulacionService(provider, "java");
+        SimulacionRequestDTO dto = crearSolicitud(
+                new int[]{0, 0, 0, 0, 1, 1, 0},
+                new int[]{1, 2, 3, 4, 1, 3, 5},
+                new int[]{100, 100, 100, 100, 0, 0, 150}, 0);
+        dto.setnBloques(4);
+        dto.setBloqueInicio(new int[]{0, 100, 200, 300});
+        dto.setBloqueTamano(new int[]{100, 100, 100, 100});
+
+        SimulacionResponseDTO resultado = java.ejecutarNativo(dto);
+
+        assertEquals(2, resultado.getCausasRechazo().get(6));
+        assertTrue(resultado.getDecisiones().get(6).mensaje().contains("200 KB libres en 2 huecos"));
+        assertTrue(resultado.getDecisiones().get(6).mensaje().contains("más grande es de 100 KB"));
     }
 }

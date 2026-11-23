@@ -20,6 +20,7 @@ public class SimulacionResponseDTO {
     private List<BloqueMemoria> mapaFinal;
 
     private List<Integer> causasRechazo;
+    private List<DecisionOperacionDTO> decisiones;
 
     private int fragmentacionInterna;
     private int fragmentacionExterna;
@@ -107,6 +108,9 @@ public class SimulacionResponseDTO {
     public void setCausasRechazo(List<Integer> causasRechazo) {
         this.causasRechazo = causasRechazo;
     }
+
+    public List<DecisionOperacionDTO> getDecisiones() { return decisiones; }
+    public void setDecisiones(List<DecisionOperacionDTO> decisiones) { this.decisiones = decisiones; }
 
     public int getFragmentacionInterna() {
         return fragmentacionInterna;

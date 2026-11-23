@@ -3,7 +3,8 @@ package com.gestormemoria.asignadorservice.model;
 public enum EstrategiaEnum {
     FIRST_FIT(0),
     BEST_FIT(1),
-    WORST_FIT(2);
+    WORST_FIT(2),
+    NEXT_FIT(3);
 
     private final int codigo;
 
