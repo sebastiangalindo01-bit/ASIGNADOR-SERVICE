@@ -3,24 +3,37 @@ package com.gestormemoria.asignadorservice.service;
 
 import com.gestormemoria.asignadorservice.dto.SimulacionRequestDTO;
 import com.gestormemoria.asignadorservice.dto.SimulacionResponseDTO;
+import com.gestormemoria.asignadorservice.dto.DecisionOperacionDTO;
 import com.gestormemoria.asignadorservice.nativebridge.MemoriaNative;
 import com.gestormemoria.asignadorservice.model.BloqueMemoria;
 import com.gestormemoria.asignadorservice.model.EstrategiaEnum;
 import com.gestormemoria.asignadorservice.model.ResultadoOperacion;
 import com.sun.jna.ptr.IntByReference;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 
 @Service
 public class SimulacionService {
 
     private final MemoriaNative memoriaNative;
+    private final String motor;
+
+    @Autowired
+    public SimulacionService(ObjectProvider<MemoriaNative> memoriaNative, @Value("${asignador.motor:native}") String motor) {
+        this.memoriaNative = memoriaNative.getIfAvailable();
+        this.motor = motor;
+    }
 
     public SimulacionService(MemoriaNative memoriaNative) {
         this.memoriaNative = memoriaNative;
+        this.motor = "native";
     }
 
     // =========================================================
@@ -30,12 +43,17 @@ public class SimulacionService {
     public SimulacionResponseDTO ejecutarNativo(SimulacionRequestDTO dto) {
 
         validarSolicitud(dto);
+        if ("java".equalsIgnoreCase(motor)) return ejecutarJava(dto);
+        if (memoriaNative == null) throw new IllegalStateException("El motor nativo no está disponible.");
 
         int capacidadBloques = dto.getnBloques() + dto.getnOps();
 
         int[] estadoOcupante = new int[capacidadBloques];
         int[] estadoTamano = new int[capacidadBloques];
         int[] causasRechazo = new int[dto.getnOps()];
+        int[] libresAlRechazar = new int[dto.getnOps()];
+        int[] huecosAlRechazar = new int[dto.getnOps()];
+        int[] mayoresAlRechazar = new int[dto.getnOps()];
 
         IntByReference numeroBloquesFinal = new IntByReference();
         IntByReference fragmentacionInterna = new IntByReference();
@@ -44,7 +62,7 @@ public class SimulacionService {
 
         int codigoEstrategia = dto.getEstrategia();
 
-        int codigoRetorno = memoriaNative.simular(
+        int codigoRetorno = memoriaNative.simular_detallado(
                 dto.getBloqueInicio(),
                 dto.getBloqueTamano(),
                 dto.getnBloques(),
@@ -59,7 +77,10 @@ public class SimulacionService {
                 causasRechazo,
                 fragmentacionInterna,
                 fragmentacionExterna,
-                huecoMayor
+                huecoMayor,
+                libresAlRechazar,
+                huecosAlRechazar,
+                mayoresAlRechazar
         );
 
         SimulacionResponseDTO respuesta = new SimulacionResponseDTO();
@@ -78,12 +99,7 @@ public class SimulacionService {
         // ni el mapa final, porque la biblioteca no garantiza
         // que esos valores hayan sido escritos.
         if (codigoRetorno != 0) {
-            respuesta.setEstado("ERROR");
-            respuesta.setMensaje(
-                    "La biblioteca C no pudo completar la simulación. "
-                            + "Código de retorno: " + codigoRetorno
-            );
-            return respuesta;
+            throw new IllegalArgumentException(mensajeError(codigoRetorno));
         }
 
         int cantidadBloques = numeroBloquesFinal.getValue();
@@ -133,6 +149,7 @@ public class SimulacionService {
         respuesta.setNumeroBloquesFinal(cantidadBloques);
         respuesta.setMapaFinal(mapaFinal);
         respuesta.setCausasRechazo(listaCausas);
+        respuesta.setDecisiones(decisiones(dto, causasRechazo, libresAlRechazar, huecosAlRechazar, mayoresAlRechazar));
 
         respuesta.setFragmentacionInterna(
                 fragmentacionInterna.getValue()
@@ -145,6 +162,81 @@ public class SimulacionService {
         respuesta.setHuecoMayor(huecoMayor.getValue());
 
         return respuesta;
+    }
+
+    private String mensajeError(int codigo) {
+        return switch (codigo) {
+            case -4 -> "No se puede liberar el proceso porque no tiene memoria asignada.";
+            case -5 -> "El proceso ya tiene memoria asignada y no puede asignarse otra vez.";
+            case -2 -> "La estrategia seleccionada no es válida.";
+            case -3 -> "El mapa de memoria no es válido o no está contiguo.";
+            case -6, -7 -> "La secuencia contiene una operación inválida.";
+            default -> "No fue posible completar la simulación. Revisa el mapa y la secuencia.";
+        };
+    }
+
+    private List<DecisionOperacionDTO> decisiones(SimulacionRequestDTO dto, int[] causas, int[] libres, int[] huecos, int[] mayores) {
+        List<DecisionOperacionDTO> items = new ArrayList<>();
+        for (int i = 0; i < dto.getnOps(); i++) {
+            boolean asignar = dto.getOpTipo()[i] == 0;
+            boolean aceptada = causas[i] == 0;
+            String causa = causas[i] == 1 ? "SIN_MEMORIA" : causas[i] == 2 ? "FRAGMENTACION_EXTERNA" : null;
+            String mensaje = "Operación completada.";
+            if (causa != null) {
+                int pedido = dto.getOpTamano()[i];
+                mensaje = causa.equals("SIN_MEMORIA")
+                        ? "P" + dto.getOpProceso()[i] + " pidió " + pedido + " KB. Hay " + libres[i] + " KB libres en total, insuficientes para atender la solicitud."
+                        : "P" + dto.getOpProceso()[i] + " pidió " + pedido + " KB. Hay " + libres[i] + " KB libres en " + huecos[i] + " huecos y el más grande es de " + mayores[i] + " KB. Esto es fragmentación externa: hay memoria suficiente en total, pero no en un espacio contiguo.";
+            }
+            items.add(new DecisionOperacionDTO(i + 1, asignar ? "ASIGNAR" : "LIBERAR", dto.getOpProceso()[i], dto.getOpTamano()[i], aceptada, causa, libres[i], huecos[i], mayores[i], mensaje));
+        }
+        return items;
+    }
+
+    private SimulacionResponseDTO ejecutarJava(SimulacionRequestDTO dto) {
+        EstrategiaEnum estrategia = EstrategiaEnum.deCodigo(dto.getEstrategia());
+        List<BloqueMemoria> memoria = new ArrayList<>();
+        for (int i = 0; i < dto.getnBloques(); i++) memoria.add(new BloqueMemoria(dto.getBloqueInicio()[i], dto.getBloqueTamano()[i], -1));
+        Map<Integer, Integer> pedidos = new java.util.HashMap<>();
+        int[] causas = new int[dto.getnOps()], libres = new int[dto.getnOps()], huecos = new int[dto.getnOps()], mayores = new int[dto.getnOps()];
+        int[] cursorDireccion = { dto.getBloqueInicio()[0] };
+        for (int i = 0; i < dto.getnOps(); i++) {
+            int tipo = dto.getOpTipo()[i], proceso = dto.getOpProceso()[i], tamano = dto.getOpTamano()[i];
+            if (tipo == 0) {
+                if (buscarProceso(memoria, proceso) != null) throw new IllegalArgumentException("El proceso P" + proceso + " ya tiene memoria asignada.");
+                BloqueMemoria bloque = buscarBloqueDisponible(memoria, tamano, estrategia, cursorDireccion[0]);
+                if (bloque == null) {
+                    long libre = 0; int mayor = 0, count = 0;
+                    for (BloqueMemoria b : memoria) if (b.estaLibre()) { libre += b.getTamano(); mayor = Math.max(mayor, b.getTamano()); count++; }
+                    causas[i] = libre < tamano ? 1 : 2; libres[i] = (int) libre; huecos[i] = count; mayores[i] = mayor;
+                    continue;
+                }
+                int resto = bloque.getTamano() - tamano;
+                if (resto >= 8) {
+                    bloque.setTamano(tamano);
+                    memoria.add(new BloqueMemoria(bloque.getInicio() + tamano, resto, -1));
+                    memoria.sort(Comparator.comparingInt(BloqueMemoria::getInicio));
+                }
+                bloque.setProcesoId(proceso);
+                pedidos.put(proceso, tamano);
+                cursorDireccion[0] = bloque.getInicio() + bloque.getTamano();
+            } else {
+                BloqueMemoria bloque = buscarProceso(memoria, proceso);
+                if (bloque == null) throw new IllegalArgumentException("No se puede liberar P" + proceso + " porque no tiene memoria asignada.");
+                bloque.setProcesoId(-1); pedidos.remove(proceso); fusionarBloquesLibres(memoria);
+            }
+        }
+        int libre = 0, mayor = 0, interna = 0;
+        for (BloqueMemoria b : memoria) {
+            if (b.estaLibre()) { libre += b.getTamano(); mayor = Math.max(mayor, b.getTamano()); }
+            else interna += b.getTamano() - pedidos.getOrDefault(b.getProcesoId(), b.getTamano());
+        }
+        SimulacionResponseDTO r = new SimulacionResponseDTO();
+        r.setMapaId(dto.getMapaId()); r.setSecuenciaId(dto.getSecuenciaId()); r.setEstrategia(estrategia.name()); r.setCodigoEstrategia(estrategia.getCodigo());
+        r.setCodigoRetorno(0); r.setEstado("COMPLETADA"); r.setMensaje("Simulación ejecutada correctamente con el motor Java.");
+        r.setNumeroBloquesFinal(memoria.size()); r.setMapaFinal(memoria); r.setCausasRechazo(java.util.Arrays.stream(causas).boxed().toList());
+        r.setDecisiones(decisiones(dto, causas, libres, huecos, mayores)); r.setFragmentacionInterna(interna); r.setFragmentacionExterna(libre - mayor); r.setHuecoMayor(mayor);
+        return r;
     }
 
     // =========================================================
@@ -174,6 +266,7 @@ public class SimulacionService {
                 EstrategiaEnum.deCodigo(dto.getEstrategia());
 
         List<ResultadoOperacion> resultados = new ArrayList<>();
+        int[] cursorDireccion = { dto.getBloqueInicio()[0] };
 
         for (int i = 0; i < dto.getnOps(); i++) {
 
@@ -184,7 +277,7 @@ public class SimulacionService {
             if (tipo == 0) {
 
                 resultados.add(
-                        asignar(memoria, i + 1, procesoId, tamano, estrategia)
+                        asignar(memoria, i + 1, procesoId, tamano, estrategia, cursorDireccion)
                 );
 
             } else if (tipo == 1) {
@@ -213,7 +306,8 @@ public class SimulacionService {
             int posicion,
             int procesoId,
             int tamano,
-            EstrategiaEnum estrategia) {
+            EstrategiaEnum estrategia,
+            int[] cursorDireccion) {
 
         if (procesoId < 0 || tamano <= 0) {
             return new ResultadoOperacion(
@@ -230,7 +324,7 @@ public class SimulacionService {
         }
 
         BloqueMemoria elegido = buscarBloqueDisponible(
-                memoria, tamano, estrategia
+                memoria, tamano, estrategia, cursorDireccion[0]
         );
 
         if (elegido == null) {
@@ -244,7 +338,7 @@ public class SimulacionService {
 
         elegido.setProcesoId(procesoId);
 
-        if (espacioOriginal > tamano) {
+        if (espacioOriginal - tamano >= 8) {
 
             int nuevoInicio = elegido.getInicio() + tamano;
             int espacioRestante = espacioOriginal - tamano;
@@ -263,6 +357,8 @@ public class SimulacionService {
                     BloqueMemoria::getInicio
             ));
         }
+
+        cursorDireccion[0] = elegido.getInicio() + elegido.getTamano();
 
         return new ResultadoOperacion(
                 posicion, 0, procesoId, true,
@@ -320,6 +416,15 @@ public class SimulacionService {
             List<BloqueMemoria> memoria,
             int tamano,
             EstrategiaEnum estrategia) {
+        return buscarBloqueDisponible(memoria, tamano, estrategia,
+                memoria.isEmpty() ? 0 : memoria.get(0).getInicio());
+    }
+
+    private BloqueMemoria buscarBloqueDisponible(
+            List<BloqueMemoria> memoria,
+            int tamano,
+            EstrategiaEnum estrategia,
+            int cursorDireccion) {
 
         List<BloqueMemoria> candidatos = new ArrayList<>();
 
@@ -349,6 +454,10 @@ public class SimulacionService {
                             BloqueMemoria::getTamano
                     ))
                     .orElse(null);
+
+            case NEXT_FIT -> candidatos.stream()
+                    .filter(b -> b.getInicio() + b.getTamano() > cursorDireccion)
+                    .findFirst().orElse(candidatos.get(0));
         };
     }
 
@@ -398,18 +507,6 @@ public class SimulacionService {
                     "La solicitud no puede estar vacía."
             );
         }
-
-        // DEPURACIÓN TEMPORAL
-        System.out.println("========== DATOS RECIBIDOS ==========");
-        System.out.println("nBloques: " + dto.getnBloques());
-        System.out.println("bloqueInicio: " + java.util.Arrays.toString(dto.getBloqueInicio()));
-        System.out.println("bloqueTamano: " + java.util.Arrays.toString(dto.getBloqueTamano()));
-        System.out.println("nOps: " + dto.getnOps());
-        System.out.println("opTipo: " + java.util.Arrays.toString(dto.getOpTipo()));
-        System.out.println("opProceso: " + java.util.Arrays.toString(dto.getOpProceso()));
-        System.out.println("opTamano: " + java.util.Arrays.toString(dto.getOpTamano()));
-        System.out.println("estrategia: " + dto.getEstrategia());
-        System.out.println("=====================================");
 
         if (dto.getnBloques() <= 0
                 || dto.getBloqueInicio() == null
