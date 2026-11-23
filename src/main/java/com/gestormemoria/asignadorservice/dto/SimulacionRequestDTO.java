@@ -1,4 +1,5 @@
 package com.gestormemoria.asignadorservice.dto;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 public class SimulacionRequestDTO {
     private Long mapaId;
@@ -24,9 +25,15 @@ public class SimulacionRequestDTO {
     public int[] getBloqueTamano() { return bloqueTamano; }
     public void setBloqueTamano(int[] bloqueTamano) { this.bloqueTamano = bloqueTamano; }
 
-    public int getnBloques() { return nBloques; }
-    public void setnBloques(int nBloques) { this.nBloques = nBloques; }
+    @JsonProperty("nBloques")
+    public int getnBloques() {
+        return nBloques;
+    }
 
+    @JsonProperty("nBloques")
+    public void setnBloques(int nBloques) {
+        this.nBloques = nBloques;
+    }
     public int[] getOpTipo() { return opTipo; }
     public void setOpTipo(int[] opTipo) { this.opTipo = opTipo; }
 
@@ -36,8 +43,15 @@ public class SimulacionRequestDTO {
     public int[] getOpTamano() { return opTamano; }
     public void setOpTamano(int[] opTamano) { this.opTamano = opTamano; }
 
-    public int getnOps() { return nOps; }
-    public void setnOps(int nOps) { this.nOps = nOps; }
+    @JsonProperty("nOps")
+    public int getnOps() {
+        return nOps;
+    }
+
+    @JsonProperty("nOps")
+    public void setnOps(int nOps) {
+        this.nOps = nOps;
+    }
 
     public int getEstrategia() { return estrategia; }
     public void setEstrategia(int estrategia) { this.estrategia = estrategia; }
